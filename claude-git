@@ -15,11 +15,14 @@ CLAUDE_GIT_MAX_LINES="${CLAUDE_GIT_MAX_LINES:-2000}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 
 # Model mapping for direct API calls
-declare -A MODEL_MAP=(
-  [haiku]="claude-haiku-4-5-20251001"
-  [sonnet]="claude-sonnet-4-6"
-  [opus]="claude-opus-4-6"
-)
+resolve_model() {
+  case "$1" in
+    haiku)  echo "claude-haiku-4-5-20251001" ;;
+    sonnet) echo "claude-sonnet-4-6" ;;
+    opus)   echo "claude-opus-4-6" ;;
+    *)      echo "$1" ;;
+  esac
+}
 
 # Load user config if exists
 [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
@@ -43,7 +46,8 @@ claude_pipe() {
 
   # Fast path: direct API call if user has an API key
   if [[ -n "$ANTHROPIC_API_KEY" ]]; then
-    local model="${MODEL_MAP[$CLAUDE_GIT_MODEL]:-$CLAUDE_GIT_MODEL}"
+    local model
+    model=$(resolve_model "$CLAUDE_GIT_MODEL")
     local content
     content=$(json_escape "$input"$'\n\n'"$prompt")
     local response
