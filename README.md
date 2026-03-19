@@ -51,6 +51,12 @@ claude-git config max_lines 5000     # send more context to Claude
 
 Config is stored in `~/.claude-git`.
 
+## Update
+
+```bash
+claude-git upgrade
+```
+
 ## Uninstall
 
 ```bash

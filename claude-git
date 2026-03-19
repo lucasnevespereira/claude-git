@@ -4,7 +4,8 @@ set -euo pipefail
 # claude-git — AI-powered git helpers using Claude CLI
 # https://github.com/lucasnevespereira/claude-git
 
-VERSION="0.2.0"
+VERSION="0.1.0"
+REPO="lucasnevespereira/claude-git"
 CONFIG_FILE="$HOME/.claude-git"
 
 # --- Config defaults ---
@@ -160,6 +161,28 @@ cmd_config() {
   echo "$key = $value"
 }
 
+cmd_upgrade() {
+  echo "Checking for updates..."
+
+  local latest
+  latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4)
+
+  if [[ -z "$latest" ]]; then
+    echo "Could not check for updates."
+    return 1
+  fi
+
+  if [[ "v${VERSION}" == "$latest" ]]; then
+    echo "Already on latest version (v${VERSION})."
+    return 0
+  fi
+
+  echo "Updating v${VERSION} → ${latest}..."
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/claude-git" -o "$HOME/.local/bin/claude-git"
+  chmod +x "$HOME/.local/bin/claude-git"
+  echo "Updated to ${latest}."
+}
+
 cmd_uninstall() {
   echo "Uninstalling claude-git..."
 
@@ -189,6 +212,7 @@ Commands:
   review              Review staged/unstaged changes for bugs
   pr [base]           Generate PR description (default base: main)
   explain             Explain what the current changes do
+  upgrade             Update to the latest version
   config              Show current config
   config <key>        Show a config value
   config <key> <val>  Set a config value
@@ -223,6 +247,7 @@ case "${1:-help}" in
   explain)  cmd_explain ;;
   config)   cmd_config "${2:-}" "${3:-}" ;;
   aliases)  cmd_aliases ;;
+  upgrade)  cmd_upgrade ;;
   uninstall) cmd_uninstall ;;
   help|-h|--help) cmd_help ;;
   version|-v|--version) echo "claude-git v${VERSION}" ;;
