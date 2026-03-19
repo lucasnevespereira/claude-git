@@ -37,12 +37,19 @@ The installer adds short aliases automatically:
 
 ## Config
 
-Create `~/.claude-git` or set environment variables:
-
 ```bash
-CLAUDE_GIT_MODEL=haiku        # model to use (default: haiku)
-CLAUDE_GIT_MAX_DIFF=5000      # max diff lines (default: 5000)
+claude-git config                    # show current config
+claude-git config model sonnet       # use a different model
+claude-git config model haiku        # back to fast mode
+claude-git config max_lines 5000     # send more context to Claude
 ```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `model` | `haiku` | Claude model to use |
+| `max_lines` | `2000` | Max diff lines sent to Claude (prevents slow/expensive calls on large diffs) |
+
+Config is stored in `~/.claude-git`.
 
 ## Uninstall
 

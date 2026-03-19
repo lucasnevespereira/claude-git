@@ -4,15 +4,16 @@ set -euo pipefail
 # claude-git — AI-powered git helpers using Claude CLI
 # https://github.com/lucasnevespereira/claude-git
 
-VERSION="0.1.1"
+VERSION="0.2.0"
+CONFIG_FILE="$HOME/.claude-git"
 
-# --- Config (override via env or ~/.claude-git) ---
+# --- Config defaults ---
 
 CLAUDE_GIT_MODEL="${CLAUDE_GIT_MODEL:-haiku}"
-CLAUDE_GIT_MAX_DIFF="${CLAUDE_GIT_MAX_DIFF:-5000}"
+CLAUDE_GIT_MAX_LINES="${CLAUDE_GIT_MAX_LINES:-2000}"
 
 # Load user config if exists
-[[ -f "$HOME/.claude-git" ]] && source "$HOME/.claude-git"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
 
 # --- Helpers ---
 
@@ -34,23 +35,29 @@ get_diff() {
     echo "No changes found." >&2
     return 1
   fi
-  # Truncate huge diffs to stay within token limits
-  echo "$diff" | head -c "$((CLAUDE_GIT_MAX_DIFF * 4))"
+
+  local total
+  total=$(echo "$diff" | wc -l | tr -d ' ')
+  if [[ "$total" -gt "$CLAUDE_GIT_MAX_LINES" ]]; then
+    echo "(diff truncated: $total lines → $CLAUDE_GIT_MAX_LINES. adjust with: claude-git config max_lines <n>)" >&2
+  fi
+
+  echo "$diff" | head -n "$CLAUDE_GIT_MAX_LINES"
 }
 
 get_branch_diff() {
   local base="${1:-main}"
-  local diff
-  diff=$(git log "$base"..HEAD --oneline 2>/dev/null)
-  if [[ -z "$diff" ]]; then
+  local commits
+  commits=$(git log "$base"..HEAD --oneline 2>/dev/null)
+  if [[ -z "$commits" ]]; then
     echo "No commits ahead of $base." >&2
     return 1
   fi
   echo "=== Commits ==="
-  echo "$diff"
+  echo "$commits"
   echo ""
   echo "=== Diff ==="
-  git diff "$base"...HEAD | head -c "$((CLAUDE_GIT_MAX_DIFF * 4))"
+  git diff "$base"...HEAD | head -n "$CLAUDE_GIT_MAX_LINES"
 }
 
 # --- Commands ---
@@ -108,21 +115,61 @@ cmd_explain() {
   get_diff | claude_pipe "explain what these changes do in 2-3 sentences. be specific about the behavior change, not just what files were touched."
 }
 
+cmd_config() {
+  local key="${1:-}"
+  local value="${2:-}"
+
+  # No args — show current config
+  if [[ -z "$key" ]]; then
+    echo "model     = $CLAUDE_GIT_MODEL"
+    echo "max_lines = $CLAUDE_GIT_MAX_LINES"
+    echo ""
+    if [[ -f "$CONFIG_FILE" ]]; then
+      echo "config: $CONFIG_FILE"
+    else
+      echo "config: (defaults, no config file)"
+    fi
+    return 0
+  fi
+
+  # One arg — show that key
+  if [[ -z "$value" ]]; then
+    case "$key" in
+      model)     echo "$CLAUDE_GIT_MODEL" ;;
+      max_lines) echo "$CLAUDE_GIT_MAX_LINES" ;;
+      *)         echo "Unknown key: $key (available: model, max_lines)"; return 1 ;;
+    esac
+    return 0
+  fi
+
+  # Two args — set key=value
+  local var_name
+  case "$key" in
+    model)     var_name="CLAUDE_GIT_MODEL" ;;
+    max_lines) var_name="CLAUDE_GIT_MAX_LINES" ;;
+    *)         echo "Unknown key: $key (available: model, max_lines)"; return 1 ;;
+  esac
+
+  # Update or create config file
+  if [[ -f "$CONFIG_FILE" ]] && grep -q "^${var_name}=" "$CONFIG_FILE"; then
+    sed -i '' "s/^${var_name}=.*/${var_name}=\"${value}\"/" "$CONFIG_FILE"
+  else
+    echo "${var_name}=\"${value}\"" >> "$CONFIG_FILE"
+  fi
+
+  echo "$key = $value"
+}
+
 cmd_uninstall() {
   echo "Uninstalling claude-git..."
 
-  # Remove binary
   rm -f "$HOME/.local/bin/claude-git"
+  rm -f "$CONFIG_FILE"
 
-  # Remove config
-  rm -f "$HOME/.claude-git"
-
-  # Clean shell rc
   SHELL_RC="$HOME/.zshrc"
   [[ "$SHELL" == */bash ]] && SHELL_RC="$HOME/.bashrc"
 
   if [[ -f "$SHELL_RC" ]]; then
-    # Remove aliases source line and comment
     sed -i '' '/claude-git aliases/d' "$SHELL_RC"
     sed -i '' '/# claude-git/d' "$SHELL_RC"
   fi
@@ -142,15 +189,14 @@ Commands:
   review              Review staged/unstaged changes for bugs
   pr [base]           Generate PR description (default base: main)
   explain             Explain what the current changes do
+  config              Show current config
+  config <key>        Show a config value
+  config <key> <val>  Set a config value
   uninstall           Remove claude-git from your system
 
-Config:
-  Set in ~/.claude-git or via environment variables:
-    CLAUDE_GIT_MODEL=haiku        Model to use (default: haiku)
-    CLAUDE_GIT_MAX_DIFF=5000      Max diff lines (default: 5000)
-
-Shell aliases (add to .zshrc):
-  source <(claude-git aliases)
+Config keys:
+  model               Claude model (default: haiku)
+  max_lines           Max diff lines sent to Claude (default: 2000)
 
 EOF
 }
@@ -175,6 +221,7 @@ case "${1:-help}" in
   review)   cmd_review ;;
   pr)       cmd_pr "${2:-main}" ;;
   explain)  cmd_explain ;;
+  config)   cmd_config "${2:-}" "${3:-}" ;;
   aliases)  cmd_aliases ;;
   uninstall) cmd_uninstall ;;
   help|-h|--help) cmd_help ;;
