@@ -12,19 +12,62 @@ CONFIG_FILE="$HOME/.claude-git"
 
 CLAUDE_GIT_MODEL="${CLAUDE_GIT_MODEL:-haiku}"
 CLAUDE_GIT_MAX_LINES="${CLAUDE_GIT_MAX_LINES:-2000}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+
+# Model mapping for direct API calls
+declare -A MODEL_MAP=(
+  [haiku]="claude-haiku-4-5-20251001"
+  [sonnet]="claude-sonnet-4-6"
+  [opus]="claude-opus-4-6"
+)
 
 # Load user config if exists
 [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
 
 # --- Helpers ---
 
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
 claude_pipe() {
-  claude -p \
+  local prompt="$1"
+  local input
+  input=$(cat)
+
+  # Fast path: direct API call if user has an API key
+  if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+    local model="${MODEL_MAP[$CLAUDE_GIT_MODEL]:-$CLAUDE_GIT_MODEL}"
+    local content
+    content=$(json_escape "$input"$'\n\n'"$prompt")
+    local response
+    response=$(curl -s https://api.anthropic.com/v1/messages \
+      -H "x-api-key: $ANTHROPIC_API_KEY" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "{\"model\":\"$model\",\"max_tokens\":256,\"messages\":[{\"role\":\"user\",\"content\":\"$content\"}]}")
+
+    if printf '%s' "$response" | grep -q '"error"'; then
+      printf '%s' "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/Error: \1/p' >&2
+      return 1
+    fi
+    printf '%s' "$response" | sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | head -1 | sed 's/\\n/\n/g; s/\\"/"/g; s/\\\\/\\/g'
+    return
+  fi
+
+  # Default: use Claude CLI
+  echo "$input" | claude -p \
     --model "$CLAUDE_GIT_MODEL" \
     --output-format text \
     --no-session-persistence \
     --effort low \
-    "$@"
+    "$prompt"
 }
 
 has_changes() {
@@ -129,6 +172,8 @@ cmd_config() {
   if [[ -z "$key" ]]; then
     echo "model     = $CLAUDE_GIT_MODEL"
     echo "max_lines = $CLAUDE_GIT_MAX_LINES"
+    echo "api_key   = ${ANTHROPIC_API_KEY:+(set)}"
+    echo "mode      = ${ANTHROPIC_API_KEY:+direct API (fast)}${ANTHROPIC_API_KEY:-Claude CLI}"
     echo ""
     if [[ -f "$CONFIG_FILE" ]]; then
       echo "config: $CONFIG_FILE"
@@ -143,7 +188,8 @@ cmd_config() {
     case "$key" in
       model)     echo "$CLAUDE_GIT_MODEL" ;;
       max_lines) echo "$CLAUDE_GIT_MAX_LINES" ;;
-      *)         echo "Unknown key: $key (available: model, max_lines)"; return 1 ;;
+      api_key)   echo "${ANTHROPIC_API_KEY:+(set)}${ANTHROPIC_API_KEY:-(not set)}" ;;
+      *)         echo "Unknown key: $key (available: model, max_lines, api_key)"; return 1 ;;
     esac
     return 0
   fi
@@ -153,7 +199,8 @@ cmd_config() {
   case "$key" in
     model)     var_name="CLAUDE_GIT_MODEL" ;;
     max_lines) var_name="CLAUDE_GIT_MAX_LINES" ;;
-    *)         echo "Unknown key: $key (available: model, max_lines)"; return 1 ;;
+    api_key)   var_name="ANTHROPIC_API_KEY" ;;
+    *)         echo "Unknown key: $key (available: model, max_lines, api_key)"; return 1 ;;
   esac
 
   # Update or create config file
