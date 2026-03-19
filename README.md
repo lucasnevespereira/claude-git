@@ -28,12 +28,13 @@ The installer adds short aliases automatically:
 
 | Alias | Command |
 |-------|---------|
-| `gpm` | `claude-git msg` |
-| `gac` | `claude-git commit` |
-| `gacf` | `claude-git commit --yes` |
-| `grev` | `claude-git review` |
-| `gpr` | `claude-git pr` |
-| `gex` | `claude-git explain` |
+| `cg`   | `claude-git` |
+| `cgm`  | `claude-git msg` |
+| `cgc`  | `claude-git commit` |
+| `cgcy` | `claude-git commit --yes` |
+| `cgrev` | `claude-git review` |
+| `cgpr` | `claude-git pr` |
+| `cgex` | `claude-git explain` |
 
 ## Config
 

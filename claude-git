@@ -375,6 +375,7 @@ Commands:
   config              Show current config
   config <key>        Show a config value
   config <key> <val>  Set a config value
+  aliases             List available shell aliases
   upgrade             Update to the latest version
   uninstall           Remove claude-git from your system
 
@@ -390,12 +391,13 @@ EOF
 cmd_aliases() {
   cat <<'EOF'
 # claude-git aliases
-alias gpm='claude-git msg'
-alias gac='claude-git commit'
-alias gacf='claude-git commit --yes'
-alias grev='claude-git review'
-alias gpr='claude-git pr'
-alias gex='claude-git explain'
+alias cg='claude-git'
+alias cgm='claude-git msg'
+alias cgc='claude-git commit'
+alias cgcy='claude-git commit --yes'
+alias cgrev='claude-git review'
+alias cgpr='claude-git pr'
+alias cgex='claude-git explain'
 EOF
 }
 
