@@ -50,6 +50,7 @@ claude-git config api_key sk-ant-... # use direct API calls (faster)
 | `model` | `haiku` | Claude model to use |
 | `max_lines` | `2000` | Max diff lines sent to Claude (prevents slow/expensive calls on large diffs) |
 | `api_key` | _(not set)_ | Anthropic API key — enables direct API calls, skipping the Claude CLI for faster responses |
+| `mode` | `auto` | `auto` (API with CLI fallback), `api` (API only), or `cli` (CLI only) |
 
 Config is stored in `~/.claude-git`.
 
