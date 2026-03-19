@@ -19,7 +19,12 @@ CLAUDE_GIT_MAX_LINES="${CLAUDE_GIT_MAX_LINES:-2000}"
 # --- Helpers ---
 
 claude_pipe() {
-  claude --model "$CLAUDE_GIT_MODEL" -p "$@"
+  claude -p \
+    --model "$CLAUDE_GIT_MODEL" \
+    --output-format text \
+    --no-session-persistence \
+    --effort low \
+    "$@"
 }
 
 has_changes() {
