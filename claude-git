@@ -13,6 +13,7 @@ CONFIG_FILE="$HOME/.claude-git"
 CLAUDE_GIT_MODEL="${CLAUDE_GIT_MODEL:-haiku}"
 CLAUDE_GIT_MAX_LINES="${CLAUDE_GIT_MAX_LINES:-2000}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+CLAUDE_GIT_MODE="${CLAUDE_GIT_MODE:-auto}"
 
 # Model mapping for direct API calls
 resolve_model() {
@@ -44,8 +45,8 @@ claude_pipe() {
   local input
   input=$(cat)
 
-  # Fast path: direct API call if user has an API key
-  if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+  # Fast path: direct API call
+  if [[ "$CLAUDE_GIT_MODE" != "cli" ]] && [[ -n "$ANTHROPIC_API_KEY" ]]; then
     local model
     model=$(resolve_model "$CLAUDE_GIT_MODEL")
     local content
@@ -61,7 +62,7 @@ claude_pipe() {
       printf '%s' "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/Error: \1/p' >&2
       return 1
     fi
-    printf '%s' "$response" | sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | head -1 | sed 's/\\n/\n/g; s/\\"/"/g; s/\\\\/\\/g'
+    printf '%s' "$response" | sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 | sed 's/\\n/\n/g; s/\\\\/\\/g'
     return
   fi
 
@@ -176,8 +177,8 @@ cmd_config() {
   if [[ -z "$key" ]]; then
     echo "model     = $CLAUDE_GIT_MODEL"
     echo "max_lines = $CLAUDE_GIT_MAX_LINES"
-    echo "api_key   = ${ANTHROPIC_API_KEY:+(set)}"
-    echo "mode      = ${ANTHROPIC_API_KEY:+direct API (fast)}${ANTHROPIC_API_KEY:-Claude CLI}"
+    echo "api_key   = ${ANTHROPIC_API_KEY:+(set)}${ANTHROPIC_API_KEY:-(not set)}"
+    echo "mode      = $CLAUDE_GIT_MODE"
     echo ""
     if [[ -f "$CONFIG_FILE" ]]; then
       echo "config: $CONFIG_FILE"
@@ -193,7 +194,8 @@ cmd_config() {
       model)     echo "$CLAUDE_GIT_MODEL" ;;
       max_lines) echo "$CLAUDE_GIT_MAX_LINES" ;;
       api_key)   echo "${ANTHROPIC_API_KEY:+(set)}${ANTHROPIC_API_KEY:-(not set)}" ;;
-      *)         echo "Unknown key: $key (available: model, max_lines, api_key)"; return 1 ;;
+      mode)      echo "$CLAUDE_GIT_MODE" ;;
+      *)         echo "Unknown key: $key (available: model, max_lines, api_key, mode)"; return 1 ;;
     esac
     return 0
   fi
@@ -204,7 +206,8 @@ cmd_config() {
     model)     var_name="CLAUDE_GIT_MODEL" ;;
     max_lines) var_name="CLAUDE_GIT_MAX_LINES" ;;
     api_key)   var_name="ANTHROPIC_API_KEY" ;;
-    *)         echo "Unknown key: $key (available: model, max_lines, api_key)"; return 1 ;;
+    mode)      var_name="CLAUDE_GIT_MODE" ;;
+    *)         echo "Unknown key: $key (available: model, max_lines, api_key, mode)"; return 1 ;;
   esac
 
   # Update or create config file
@@ -277,6 +280,8 @@ Commands:
 Config keys:
   model               Claude model (default: haiku)
   max_lines           Max diff lines sent to Claude (default: 2000)
+  api_key             Anthropic API key for direct API mode
+  mode                auto, api, or cli (default: auto)
 
 EOF
 }
