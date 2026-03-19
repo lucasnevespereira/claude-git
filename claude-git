@@ -8,27 +8,35 @@ VERSION="0.2.0"
 REPO="lucasnevespereira/claude-git"
 CONFIG_FILE="$HOME/.claude-git"
 
-# --- Config defaults ---
+# --- Config ---
 
 CLAUDE_GIT_MODEL="${CLAUDE_GIT_MODEL:-haiku}"
 CLAUDE_GIT_MAX_LINES="${CLAUDE_GIT_MAX_LINES:-2000}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 CLAUDE_GIT_MODE="${CLAUDE_GIT_MODE:-auto}"
 
-# Model mapping for direct API calls
-resolve_model() {
-  case "$1" in
-    haiku)  echo "claude-haiku-4-5-20251001" ;;
-    sonnet) echo "claude-sonnet-4-6" ;;
-    opus)   echo "claude-opus-4-6" ;;
-    *)      echo "$1" ;;
-  esac
-}
-
-# Load user config if exists
 [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
 
-# --- Helpers ---
+# --- Utilities ---
+
+die()  { printf 'claude-git: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'claude-git: %s\n' "$*" >&2; }
+
+require_cmd() {
+  command -v "$1" &>/dev/null || die "'$1' is required but not installed."
+}
+
+require_git_repo() {
+  git rev-parse --git-dir &>/dev/null || die "not a git repository."
+}
+
+sed_inplace() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
 
 json_escape() {
   local s="$1"
@@ -40,33 +48,108 @@ json_escape() {
   printf '%s' "$s"
 }
 
-claude_pipe() {
-  local prompt="$1"
-  local input
-  input=$(cat)
+resolve_model() {
+  case "$1" in
+    haiku)  echo "claude-haiku-4-5-20251001" ;;
+    sonnet) echo "claude-sonnet-4-6" ;;
+    opus)   echo "claude-opus-4-6" ;;
+    *)      echo "$1" ;;
+  esac
+}
 
-  # Fast path: direct API call
-  if [[ "$CLAUDE_GIT_MODE" != "cli" ]] && [[ -n "$ANTHROPIC_API_KEY" ]]; then
-    local model
-    model=$(resolve_model "$CLAUDE_GIT_MODEL")
-    local content
-    content=$(json_escape "$input"$'\n\n'"$prompt")
-    local response
-    response=$(curl -s https://api.anthropic.com/v1/messages \
-      -H "x-api-key: $ANTHROPIC_API_KEY" \
-      -H "anthropic-version: 2023-06-01" \
-      -H "content-type: application/json" \
-      -d "{\"model\":\"$model\",\"max_tokens\":256,\"messages\":[{\"role\":\"user\",\"content\":\"$content\"}]}")
+config_var() {
+  case "$1" in
+    model)     echo "CLAUDE_GIT_MODEL" ;;
+    max_lines) echo "CLAUDE_GIT_MAX_LINES" ;;
+    api_key)   echo "ANTHROPIC_API_KEY" ;;
+    mode)      echo "CLAUDE_GIT_MODE" ;;
+    *)         return 1 ;;
+  esac
+}
 
-    if printf '%s' "$response" | grep -q '"error"'; then
-      printf '%s' "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/Error: \1/p' >&2
-      return 1
-    fi
-    printf '%s' "$response" | sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 | sed 's/\\n/\n/g; s/\\\\/\\/g'
-    return
+# --- Git ---
+
+has_changes() {
+  ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null
+}
+
+get_diff() {
+  local diff=""
+
+  if git rev-parse --verify HEAD &>/dev/null; then
+    diff=$(git diff HEAD 2>/dev/null)
+  fi
+  if [[ -z "$diff" ]]; then
+    diff=$(git diff --cached 2>/dev/null)
   fi
 
-  # Default: use Claude CLI
+  [[ -z "$diff" ]] && die "no diff found. Stage changes or modify tracked files."
+
+  local total
+  total=$(printf '%s\n' "$diff" | wc -l | tr -d ' ')
+  if [[ "$total" -gt "$CLAUDE_GIT_MAX_LINES" ]]; then
+    warn "(diff truncated: $total -> $CLAUDE_GIT_MAX_LINES lines. adjust with: claude-git config max_lines <n>)"
+  fi
+
+  printf '%s\n' "$diff" | head -n "$CLAUDE_GIT_MAX_LINES"
+}
+
+get_branch_diff() {
+  local base="${1:-main}"
+
+  git rev-parse --verify "$base" &>/dev/null || die "branch '$base' not found."
+
+  local commits
+  commits=$(git log "$base"..HEAD --oneline 2>/dev/null)
+  [[ -z "$commits" ]] && die "no commits ahead of '$base'."
+
+  echo "=== Commits ==="
+  echo "$commits"
+  echo ""
+  echo "=== Diff ==="
+  git diff "$base"...HEAD | head -n "$CLAUDE_GIT_MAX_LINES"
+}
+
+# --- Claude ---
+
+# Send prompt to Anthropic API. Returns text on success, exits on failure.
+call_api() {
+  local prompt="$1" max_tokens="$2" input="$3"
+  require_cmd curl
+
+  local model content response
+  model=$(resolve_model "$CLAUDE_GIT_MODEL")
+  content=$(json_escape "$input"$'\n\n'"$prompt")
+
+  response=$(curl -s https://api.anthropic.com/v1/messages \
+    -H "x-api-key: $ANTHROPIC_API_KEY" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "content-type: application/json" \
+    -d "{\"model\":\"$model\",\"max_tokens\":$max_tokens,\"messages\":[{\"role\":\"user\",\"content\":\"$content\"}]}") || {
+      warn "API request failed."
+      return 1
+    }
+
+  # Check for API error
+  if printf '%s' "$response" | grep -q '"error"'; then
+    local err_msg
+    err_msg=$(printf '%s' "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    warn "API error: ${err_msg:-unknown}"
+    return 1
+  fi
+
+  # Extract text from response
+  printf '%s' "$response" \
+    | sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' \
+    | head -1 \
+    | sed 's/\\n/\n/g; s/\\\\/\\/g'
+}
+
+# Send prompt to Claude CLI. Returns text on success.
+call_cli() {
+  local prompt="$1" input="$2"
+  require_cmd claude
+
   echo "$input" | claude -p \
     --model "$CLAUDE_GIT_MODEL" \
     --output-format text \
@@ -75,65 +158,68 @@ claude_pipe() {
     "$prompt"
 }
 
-has_changes() {
-  ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet 2>/dev/null
-}
+# Pipe stdin + prompt to Claude via API or CLI based on mode.
+claude_pipe() {
+  local prompt="$1"
+  local max_tokens="${2:-256}"
+  local input
+  input=$(cat)
 
-get_diff() {
-  local diff
-  diff=$(git diff HEAD 2>/dev/null)
-  if [[ -z "$diff" ]]; then
-    diff=$(git diff --cached 2>/dev/null)
-  fi
-  if [[ -z "$diff" ]]; then
-    echo "No changes found." >&2
-    return 1
-  fi
+  [[ -z "$input" ]] && die "no input to send to Claude."
 
-  local total
-  total=$(echo "$diff" | wc -l | tr -d ' ')
-  if [[ "$total" -gt "$CLAUDE_GIT_MAX_LINES" ]]; then
-    echo "(diff truncated: $total lines → $CLAUDE_GIT_MAX_LINES. adjust with: claude-git config max_lines <n>)" >&2
+  # API-only mode
+  if [[ "$CLAUDE_GIT_MODE" == "api" ]]; then
+    [[ -n "$ANTHROPIC_API_KEY" ]] || die "mode is 'api' but no API key is configured. Run: claude-git config api_key <key>"
+    call_api "$prompt" "$max_tokens" "$input"
+    return
   fi
 
-  echo "$diff" | head -n "$CLAUDE_GIT_MAX_LINES"
-}
-
-get_branch_diff() {
-  local base="${1:-main}"
-  local commits
-  commits=$(git log "$base"..HEAD --oneline 2>/dev/null)
-  if [[ -z "$commits" ]]; then
-    echo "No commits ahead of $base." >&2
-    return 1
+  # CLI-only mode
+  if [[ "$CLAUDE_GIT_MODE" == "cli" ]]; then
+    call_cli "$prompt" "$input"
+    return
   fi
-  echo "=== Commits ==="
-  echo "$commits"
-  echo ""
-  echo "=== Diff ==="
-  git diff "$base"...HEAD | head -n "$CLAUDE_GIT_MAX_LINES"
+
+  # Auto mode: try API first if key is set, fall back to CLI
+  if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+    if call_api "$prompt" "$max_tokens" "$input" 2>/dev/null; then
+      return
+    fi
+    warn "API unavailable, using CLI..."
+  fi
+
+  call_cli "$prompt" "$input"
 }
 
 # --- Commands ---
 
+cmd_msg() {
+  has_changes || die "no changes to commit."
+  get_diff | claude_pipe \
+    "propose a conventional commit message for these changes. one line, max 72 chars. output only the message, nothing else." \
+    256
+}
+
 cmd_commit() {
-  has_changes || { echo "No changes to commit."; return 1; }
+  has_changes || die "no changes to commit."
 
   local msg
-  msg=$(get_diff | claude_pipe "propose a conventional commit message for these changes. one line, max 72 chars. output only the message, nothing else.")
+  msg=$(get_diff | claude_pipe \
+    "propose a conventional commit message for these changes. one line, max 72 chars. output only the message, nothing else." \
+    256)
 
-  [[ -z "$msg" ]] && { echo "Failed to generate message."; return 1; }
+  [[ -z "$msg" ]] && die "failed to generate commit message."
 
   echo ""
   echo "  $msg"
   echo ""
 
-  if [[ "${1:-}" == "--yes" ]] || [[ "${1:-}" == "-y" ]]; then
+  if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
     git add -A && git commit -m "$msg"
   else
     printf "Commit with this message? [y/N] "
     read -r confirm
-    if [[ "$confirm" == "y" ]]; then
+    if [[ "$confirm" =~ ^[yY]$ ]]; then
       git add -A && git commit -m "$msg"
     else
       echo "Aborted."
@@ -141,14 +227,11 @@ cmd_commit() {
   fi
 }
 
-cmd_msg() {
-  has_changes || { echo "No changes to commit."; return 1; }
-  get_diff | claude_pipe "propose a conventional commit message for these changes. one line, max 72 chars. output only the message, nothing else."
-}
-
 cmd_review() {
-  has_changes || { echo "No changes to review."; return 1; }
-  get_diff | claude_pipe "review this diff. be concise. flag bugs, security issues, and logic errors. if it looks good, say so. skip style nitpicks."
+  has_changes || die "no changes to review."
+  get_diff | claude_pipe \
+    "review this diff. be concise. flag bugs, security issues, and logic errors. if it looks good, say so. skip style nitpicks." \
+    1024
 }
 
 cmd_pr() {
@@ -161,19 +244,22 @@ one paragraph summary.
 ## Changes
 - bullet points of key changes
 
-output only the description, no title."
+output only the description, no title." \
+    1024
 }
 
 cmd_explain() {
-  has_changes || { echo "No changes to explain."; return 1; }
-  get_diff | claude_pipe "explain what these changes do in 2-3 sentences. be specific about the behavior change, not just what files were touched."
+  has_changes || die "no changes to explain."
+  get_diff | claude_pipe \
+    "explain what these changes do in 2-3 sentences. be specific about the behavior change, not just what files were touched." \
+    512
 }
 
 cmd_config() {
   local key="${1:-}"
   local value="${2:-}"
 
-  # No args — show current config
+  # No args: show all
   if [[ -z "$key" ]]; then
     echo "model     = $CLAUDE_GIT_MODEL"
     echo "max_lines = $CLAUDE_GIT_MAX_LINES"
@@ -188,31 +274,28 @@ cmd_config() {
     return 0
   fi
 
-  # One arg — show that key
+  local var_name
+  var_name=$(config_var "$key") || die "unknown config key: $key (available: model, max_lines, api_key, mode)"
+
+  # One arg: show value
   if [[ -z "$value" ]]; then
-    case "$key" in
-      model)     echo "$CLAUDE_GIT_MODEL" ;;
-      max_lines) echo "$CLAUDE_GIT_MAX_LINES" ;;
-      api_key)   echo "${ANTHROPIC_API_KEY:+(set)}${ANTHROPIC_API_KEY:-(not set)}" ;;
-      mode)      echo "$CLAUDE_GIT_MODE" ;;
-      *)         echo "Unknown key: $key (available: model, max_lines, api_key, mode)"; return 1 ;;
-    esac
+    if [[ "$key" == "api_key" ]]; then
+      echo "${ANTHROPIC_API_KEY:+(set)}${ANTHROPIC_API_KEY:-(not set)}"
+    else
+      echo "${!var_name}"
+    fi
     return 0
   fi
 
-  # Two args — set key=value
-  local var_name
+  # Validate before writing
   case "$key" in
-    model)     var_name="CLAUDE_GIT_MODEL" ;;
-    max_lines) var_name="CLAUDE_GIT_MAX_LINES" ;;
-    api_key)   var_name="ANTHROPIC_API_KEY" ;;
-    mode)      var_name="CLAUDE_GIT_MODE" ;;
-    *)         echo "Unknown key: $key (available: model, max_lines, api_key, mode)"; return 1 ;;
+    max_lines) [[ "$value" =~ ^[0-9]+$ ]] || die "max_lines must be a number." ;;
+    mode)      [[ "$value" =~ ^(auto|api|cli)$ ]] || die "mode must be: auto, api, or cli." ;;
   esac
 
-  # Update or create config file
+  # Write to config file
   if [[ -f "$CONFIG_FILE" ]] && grep -q "^${var_name}=" "$CONFIG_FILE"; then
-    sed -i '' "s/^${var_name}=.*/${var_name}=\"${value}\"/" "$CONFIG_FILE"
+    sed_inplace "s|^${var_name}=.*|${var_name}=\"${value}\"|" "$CONFIG_FILE"
   else
     echo "${var_name}=\"${value}\"" >> "$CONFIG_FILE"
   fi
@@ -221,42 +304,46 @@ cmd_config() {
 }
 
 cmd_upgrade() {
+  require_cmd curl
   echo "Checking for updates..."
 
   local latest
-  latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4)
+  latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+    | grep '"tag_name"' | cut -d'"' -f4) || true
 
-  if [[ -z "$latest" ]]; then
-    echo "Could not check for updates."
-    return 1
-  fi
+  [[ -z "$latest" ]] && die "could not check for updates."
 
   if [[ "v${VERSION}" == "$latest" ]]; then
     echo "Already on latest version (v${VERSION})."
     return 0
   fi
 
-  echo "Updating v${VERSION} → ${latest}..."
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/claude-git" -o "$HOME/.local/bin/claude-git"
+  echo "Updating v${VERSION} -> ${latest}..."
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/${latest}/claude-git" -o "$HOME/.local/bin/claude-git"
   chmod +x "$HOME/.local/bin/claude-git"
   echo "Updated to ${latest}."
 }
 
 cmd_uninstall() {
+  printf "Remove claude-git and its config? [y/N] "
+  read -r confirm
+  [[ "$confirm" =~ ^[yY]$ ]] || { echo "Aborted."; return 0; }
+
   echo "Uninstalling claude-git..."
 
   rm -f "$HOME/.local/bin/claude-git"
   rm -f "$CONFIG_FILE"
 
-  SHELL_RC="$HOME/.zshrc"
-  [[ "$SHELL" == */bash ]] && SHELL_RC="$HOME/.bashrc"
+  local shell_rc="$HOME/.zshrc"
+  [[ "$SHELL" == */bash ]] && shell_rc="$HOME/.bashrc"
 
-  if [[ -f "$SHELL_RC" ]]; then
-    sed -i '' '/claude-git aliases/d' "$SHELL_RC"
-    sed -i '' '/# claude-git/d' "$SHELL_RC"
+  if [[ -f "$shell_rc" ]]; then
+    sed_inplace '/# >>> claude-git >>>/,/# <<< claude-git <<</d' "$shell_rc"
+    sed_inplace '/claude-git aliases/d' "$shell_rc"
+    sed_inplace '/# claude-git/d' "$shell_rc"
   fi
 
-  echo "Removed. Restart your shell or run: source $SHELL_RC"
+  echo "Removed. Restart your shell or run: source $shell_rc"
 }
 
 cmd_help() {
@@ -271,10 +358,10 @@ Commands:
   review              Review staged/unstaged changes for bugs
   pr [base]           Generate PR description (default base: main)
   explain             Explain what the current changes do
-  upgrade             Update to the latest version
   config              Show current config
   config <key>        Show a config value
   config <key> <val>  Set a config value
+  upgrade             Update to the latest version
   uninstall           Remove claude-git from your system
 
 Config keys:
@@ -301,20 +388,24 @@ EOF
 # --- Main ---
 
 case "${1:-help}" in
-  msg)      cmd_msg ;;
-  commit)   cmd_commit "${2:-}" ;;
-  review)   cmd_review ;;
-  pr)       cmd_pr "${2:-main}" ;;
-  explain)  cmd_explain ;;
-  config)   cmd_config "${2:-}" "${3:-}" ;;
-  aliases)  cmd_aliases ;;
-  upgrade)  cmd_upgrade ;;
+  msg|commit|review|pr|explain) require_git_repo ;;
+esac
+
+case "${1:-help}" in
+  msg)       cmd_msg ;;
+  commit)    cmd_commit "${2:-}" ;;
+  review)    cmd_review ;;
+  pr)        cmd_pr "${2:-main}" ;;
+  explain)   cmd_explain ;;
+  config)    cmd_config "${2:-}" "${3:-}" ;;
+  aliases)   cmd_aliases ;;
+  upgrade)   cmd_upgrade ;;
   uninstall) cmd_uninstall ;;
-  help|-h|--help) cmd_help ;;
+  help|-h|--help)       cmd_help ;;
   version|-v|--version) echo "claude-git v${VERSION}" ;;
   *)
     echo "Unknown command: $1"
     echo "Run 'claude-git help' for usage."
-    return 1 2>/dev/null || exit 1
+    exit 1
     ;;
 esac

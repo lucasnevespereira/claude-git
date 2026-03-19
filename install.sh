@@ -10,12 +10,21 @@ BINARY_NAME="claude-git"
 
 echo "Installing claude-git..."
 
-# Check for claude CLI
+# Check for curl
+if ! command -v curl &>/dev/null; then
+  echo "Error: 'curl' is required but not installed."
+  exit 1
+fi
+
+# Check for claude CLI (warn only — user can use api_key mode without it)
 if ! command -v claude &>/dev/null; then
   echo ""
-  echo "Error: 'claude' CLI not found."
-  echo "Install it first: https://docs.anthropic.com/en/docs/claude-code"
-  exit 1
+  echo "Note: 'claude' CLI not found."
+  echo "You can still use claude-git with a direct API key:"
+  echo "  claude-git config api_key sk-ant-..."
+  echo ""
+  echo "Or install Claude Code: https://docs.anthropic.com/en/docs/claude-code"
+  echo ""
 fi
 
 # Create install dir
@@ -25,11 +34,12 @@ mkdir -p "$INSTALL_DIR"
 curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/claude-git" -o "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
-# Check if install dir is in PATH
-if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-  SHELL_RC="$HOME/.zshrc"
-  [[ "$SHELL" == */bash ]] && SHELL_RC="$HOME/.bashrc"
+# Determine shell RC file
+SHELL_RC="$HOME/.zshrc"
+[[ "$SHELL" == */bash ]] && SHELL_RC="$HOME/.bashrc"
 
+# Ensure install dir is in PATH
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   if ! grep -q '.local/bin' "$SHELL_RC" 2>/dev/null; then
     echo '' >> "$SHELL_RC"
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
@@ -37,14 +47,14 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   fi
 fi
 
-# Offer to install aliases
-SHELL_RC="$HOME/.zshrc"
-[[ "$SHELL" == */bash ]] && SHELL_RC="$HOME/.bashrc"
-
-if ! grep -q 'claude-git aliases' "$SHELL_RC" 2>/dev/null; then
-  echo '' >> "$SHELL_RC"
-  echo '# claude-git aliases' >> "$SHELL_RC"
-  echo 'source <(claude-git aliases)' >> "$SHELL_RC"
+# Add aliases with block markers (idempotent)
+if ! grep -q '# >>> claude-git >>>' "$SHELL_RC" 2>/dev/null; then
+  {
+    echo ''
+    echo '# >>> claude-git >>>'
+    echo 'source <(claude-git aliases)'
+    echo '# <<< claude-git <<<'
+  } >> "$SHELL_RC"
   echo "Added aliases to $SHELL_RC"
 fi
 

@@ -22,8 +22,12 @@ esac
 
 NEW="${MAJOR}.${MINOR}.${PATCH}"
 
-# Update version in script
-sed -i '' "s/^VERSION=\".*\"/VERSION=\"${NEW}\"/" claude-git
+# Update version in script (cross-platform)
+if [[ "$OSTYPE" == darwin* ]]; then
+  sed -i '' "s/^VERSION=\".*\"/VERSION=\"${NEW}\"/" claude-git
+else
+  sed -i "s/^VERSION=\".*\"/VERSION=\"${NEW}\"/" claude-git
+fi
 
 # Commit, tag, push
 git add claude-git
