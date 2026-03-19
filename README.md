@@ -1,6 +1,8 @@
 # claude-git
 
-AI-powered git helpers using [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Commit messages, code review, PR descriptions — all from your terminal.
+AI-powered git helpers using [Claude](https://www.anthropic.com/claude). Commit messages, code review, PR descriptions — all from your terminal.
+
+Works with the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or directly via the [Anthropic API](https://docs.anthropic.com/en/docs/initial-setup).
 
 ## Install
 
@@ -8,14 +10,14 @@ AI-powered git helpers using [Claude Code](https://docs.anthropic.com/en/docs/cl
 curl -fsSL https://raw.githubusercontent.com/lucasnevespereira/claude-git/main/install.sh | bash
 ```
 
-Requires [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
-
 ## Usage
 
 ```bash
 claude-git msg                # propose a commit message
 claude-git commit             # propose + commit with confirmation
 claude-git commit -y          # propose + commit, skip confirmation
+claude-git prefix             # propose + commit with prefix (auto-detects from branch)
+claude-git prefix PROJ-42    # propose + commit with explicit prefix
 claude-git review             # review changes for bugs
 claude-git pr                 # generate PR description
 claude-git pr develop         # PR description against a different base
@@ -35,6 +37,7 @@ The installer adds short aliases automatically:
 | `cgrev` | `claude-git review` |
 | `cgpr` | `claude-git pr` |
 | `cgex` | `claude-git explain` |
+| `cgpx` | `claude-git prefix` |
 
 ## Config
 

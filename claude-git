@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# claude-git — AI-powered git helpers using Claude CLI
+# claude-git — AI-powered git helpers using Claude
 # https://github.com/lucasnevespereira/claude-git
 
 VERSION="0.3.0"
@@ -92,6 +92,15 @@ get_diff() {
   fi
 
   printf '%s\n' "$diff" | head -n "$CLAUDE_GIT_MAX_LINES"
+}
+
+# Extract ticket ID (e.g. CMB-1234, PROJ-42) from current branch name
+ticket_from_branch() {
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || return 1
+  if [[ "$branch" =~ ([A-Z][A-Z0-9]*-[0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  fi
 }
 
 get_branch_diff() {
@@ -201,6 +210,9 @@ cmd_msg() {
 }
 
 cmd_commit() {
+  local auto_yes=false
+  [[ "${1:-}" == "-y" || "${1:-}" == "--yes" ]] && auto_yes=true
+
   has_changes || die "no changes to commit."
 
   local msg
@@ -214,7 +226,44 @@ cmd_commit() {
   echo "  $msg"
   echo ""
 
-  if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
+  if $auto_yes; then
+    git add -A && git commit -m "$msg"
+  else
+    printf "Commit with this message? [y/N] "
+    read -r confirm
+    if [[ "$confirm" =~ ^[yY]$ ]]; then
+      git add -A && git commit -m "$msg"
+    else
+      echo "Aborted."
+    fi
+  fi
+}
+
+cmd_prefix() {
+  local prefix="${1:-}"
+  local auto_yes=false
+  [[ "${2:-}" == "-y" || "${2:-}" == "--yes" ]] && auto_yes=true
+
+  # Use explicit prefix or auto-detect from branch name
+  if [[ -z "$prefix" ]]; then
+    prefix=$(ticket_from_branch) || true
+  fi
+  [[ -z "$prefix" ]] && die "no ID found in branch name. Usage: claude-git prefix <ID>"
+
+  has_changes || die "no changes to commit."
+
+  local msg
+  msg=$(get_diff | claude_pipe \
+    "propose a commit message for these changes prefixed with '${prefix}:'. one line, max 72 chars. output only the message, nothing else." \
+    256)
+
+  [[ -z "$msg" ]] && die "failed to generate commit message."
+
+  echo ""
+  echo "  $msg"
+  echo ""
+
+  if $auto_yes; then
     git add -A && git commit -m "$msg"
   else
     printf "Commit with this message? [y/N] "
@@ -369,6 +418,7 @@ Usage: claude-git <command> [options]
 Commands:
   msg                 Propose a commit message (print only)
   commit [--yes|-y]   Propose + commit with confirmation (--yes to skip)
+  prefix [ID] [-y]    Propose + commit with prefix (auto-detects from branch)
   review              Review staged/unstaged changes for bugs
   pr [base]           Generate PR description (default base: main)
   explain             Explain what the current changes do
@@ -398,29 +448,34 @@ alias cgcy='claude-git commit --yes'
 alias cgrev='claude-git review'
 alias cgpr='claude-git pr'
 alias cgex='claude-git explain'
+alias cgpx='claude-git prefix'
 EOF
 }
 
 # --- Main ---
 
-case "${1:-help}" in
-  msg|commit|review|pr|explain) require_git_repo ;;
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  msg|commit|prefix|review|pr|explain) require_git_repo ;;
 esac
 
-case "${1:-help}" in
-  msg)       cmd_msg ;;
-  commit)    cmd_commit "${2:-}" ;;
+case "$cmd" in
+  msg)       cmd_msg "$@" ;;
+  commit)    cmd_commit "$@" ;;
+  prefix)    cmd_prefix "$@" ;;
   review)    cmd_review ;;
-  pr)        cmd_pr "${2:-main}" ;;
+  pr)        cmd_pr "$@" ;;
   explain)   cmd_explain ;;
-  config)    cmd_config "${2:-}" "${3:-}" ;;
+  config)    cmd_config "$@" ;;
   aliases)   cmd_aliases ;;
   upgrade)   cmd_upgrade ;;
   uninstall) cmd_uninstall ;;
   help|-h|--help)       cmd_help ;;
   version|-v|--version) echo "claude-git v${VERSION}" ;;
   *)
-    echo "Unknown command: $1"
+    echo "Unknown command: $cmd"
     echo "Run 'claude-git help' for usage."
     exit 1
     ;;
