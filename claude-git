@@ -318,9 +318,23 @@ cmd_upgrade() {
     return 0
   fi
 
+  local target="$HOME/.local/bin/claude-git"
+  local tmpfile
+  tmpfile=$(mktemp "${target}.XXXXXX") || die "could not create temp file."
+
   echo "Updating v${VERSION} -> ${latest}..."
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/${latest}/claude-git" -o "$HOME/.local/bin/claude-git"
-  chmod +x "$HOME/.local/bin/claude-git"
+  if ! curl -fsSL "https://raw.githubusercontent.com/${REPO}/${latest}/claude-git" -o "$tmpfile"; then
+    rm -f "$tmpfile"
+    die "download failed."
+  fi
+
+  if ! bash -n "$tmpfile" 2>/dev/null; then
+    rm -f "$tmpfile"
+    die "downloaded file is corrupt."
+  fi
+
+  chmod +x "$tmpfile"
+  mv -f "$tmpfile" "$target"
   echo "Updated to ${latest}."
 }
 
