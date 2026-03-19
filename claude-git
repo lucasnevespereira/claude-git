@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-git — AI-powered git helpers using Claude CLI
+# https://github.com/lucasnevespereira/claude-git
+
+VERSION="0.1.0"
+
+# --- Config (override via env or ~/.claude-git) ---
+
+CLAUDE_GIT_MODEL="${CLAUDE_GIT_MODEL:-haiku}"
+CLAUDE_GIT_MAX_DIFF="${CLAUDE_GIT_MAX_DIFF:-5000}"
+
+# Load user config if exists
+[[ -f "$HOME/.claude-git" ]] && source "$HOME/.claude-git"
+
+# --- Helpers ---
+
+claude_pipe() {
+  claude --model "$CLAUDE_GIT_MODEL" -p "$@"
+}
+
+has_changes() {
+  ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet 2>/dev/null
+}
+
+get_diff() {
+  local diff
+  diff=$(git diff HEAD 2>/dev/null)
+  if [[ -z "$diff" ]]; then
+    diff=$(git diff --cached 2>/dev/null)
+  fi
+  if [[ -z "$diff" ]]; then
+    echo "No changes found." >&2
+    return 1
+  fi
+  # Truncate huge diffs to stay within token limits
+  echo "$diff" | head -c "$((CLAUDE_GIT_MAX_DIFF * 4))"
+}
+
+get_branch_diff() {
+  local base="${1:-main}"
+  local diff
+  diff=$(git log "$base"..HEAD --oneline 2>/dev/null)
+  if [[ -z "$diff" ]]; then
+    echo "No commits ahead of $base." >&2
+    return 1
+  fi
+  echo "=== Commits ==="
+  echo "$diff"
+  echo ""
+  echo "=== Diff ==="
+  git diff "$base"...HEAD | head -c "$((CLAUDE_GIT_MAX_DIFF * 4))"
+}
+
+# --- Commands ---
+
+cmd_commit() {
+  has_changes || { echo "No changes to commit."; return 1; }
+
+  local msg
+  msg=$(get_diff | claude_pipe "propose a conventional commit message for these changes. one line, max 72 chars. output only the message, nothing else.")
+
+  [[ -z "$msg" ]] && { echo "Failed to generate message."; return 1; }
+
+  echo ""
+  echo "  $msg"
+  echo ""
+
+  if [[ "${1:-}" == "--yes" ]] || [[ "${1:-}" == "-y" ]]; then
+    git add -A && git commit -m "$msg"
+  else
+    printf "Commit with this message? [y/N] "
+    read -r confirm
+    if [[ "$confirm" == "y" ]]; then
+      git add -A && git commit -m "$msg"
+    else
+      echo "Aborted."
+    fi
+  fi
+}
+
+cmd_msg() {
+  has_changes || { echo "No changes to commit."; return 1; }
+  get_diff | claude_pipe "propose a conventional commit message for these changes. one line, max 72 chars. output only the message, nothing else."
+}
+
+cmd_review() {
+  has_changes || { echo "No changes to review."; return 1; }
+  get_diff | claude_pipe "review this diff. be concise. flag bugs, security issues, and logic errors. if it looks good, say so. skip style nitpicks."
+}
+
+cmd_pr() {
+  local base="${1:-main}"
+  get_branch_diff "$base" | claude_pipe "write a pull request description for these changes. format:
+
+## What
+one paragraph summary.
+
+## Changes
+- bullet points of key changes
+
+output only the description, no title."
+}
+
+cmd_explain() {
+  has_changes || { echo "No changes to explain."; return 1; }
+  get_diff | claude_pipe "explain what these changes do in 2-3 sentences. be specific about the behavior change, not just what files were touched."
+}
+
+cmd_help() {
+  cat <<EOF
+claude-git v${VERSION} — AI-powered git helpers
+
+Usage: claude-git <command> [options]
+
+Commands:
+  msg                 Propose a commit message (print only)
+  commit [--yes|-y]   Propose + commit with confirmation (--yes to skip)
+  review              Review staged/unstaged changes for bugs
+  pr [base]           Generate PR description (default base: main)
+  explain             Explain what the current changes do
+
+Config:
+  Set in ~/.claude-git or via environment variables:
+    CLAUDE_GIT_MODEL=haiku        Model to use (default: haiku)
+    CLAUDE_GIT_MAX_DIFF=5000      Max diff lines (default: 5000)
+
+Shell aliases (add to .zshrc):
+  source <(claude-git aliases)
+
+EOF
+}
+
+cmd_aliases() {
+  cat <<'EOF'
+# claude-git aliases
+alias gpm='claude-git msg'
+alias gac='claude-git commit'
+alias gacf='claude-git commit --yes'
+alias grev='claude-git review'
+alias gpr='claude-git pr'
+alias gex='claude-git explain'
+EOF
+}
+
+# --- Main ---
+
+case "${1:-help}" in
+  msg)      cmd_msg ;;
+  commit)   cmd_commit "${2:-}" ;;
+  review)   cmd_review ;;
+  pr)       cmd_pr "${2:-main}" ;;
+  explain)  cmd_explain ;;
+  aliases)  cmd_aliases ;;
+  help|-h|--help) cmd_help ;;
+  version|-v|--version) echo "claude-git v${VERSION}" ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Run 'claude-git help' for usage."
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
