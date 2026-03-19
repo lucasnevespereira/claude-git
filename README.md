@@ -33,7 +33,5 @@ CLAUDE_GIT_MAX_DIFF=5000      # Max diff lines (default: 5000)
 ## Uninstall
 
 ```bash
-rm ~/.local/bin/claude-git
+claude-git uninstall
 ```
-
-Remove the aliases line from your `.zshrc`.
