@@ -4,7 +4,7 @@ set -euo pipefail
 # claude-git — AI-powered git helpers using Claude CLI
 # https://github.com/lucasnevespereira/claude-git
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 
 # --- Config (override via env or ~/.claude-git) ---
 
