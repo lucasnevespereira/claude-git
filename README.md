@@ -7,10 +7,6 @@ A CLI that generates commit messages, code reviews, and PR descriptions using [C
 
 Works with the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or directly via the [Anthropic API](https://docs.anthropic.com/en/docs/initial-setup).
 
-## Why?
-
-Sometimes I'd spend more time thinking about a commit message than writing the actual code. This tool reads your diff and lets Claude propose one for you.
-
 ## Install
 
 ```bash
